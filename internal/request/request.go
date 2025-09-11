@@ -4,19 +4,22 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"the_startup/internal/headers"
 	"unicode"
 )
 
 type RequestStatus int
 
 const (
-	Initialized RequestStatus = iota
-	Done
+	RequestStateInitialized RequestStatus = iota
+	RequestStateParsingHeaders
+	RequestStateDone
 )
 
 type Request struct {
 	RequestLine RequestLine
 	Status      RequestStatus
+	Headers     headers.Headers
 }
 
 type RequestLine struct {
@@ -26,7 +29,8 @@ type RequestLine struct {
 }
 
 func (r *Request) parse(data []byte) (int, error) {
-	if r.Status == Initialized {
+	totalBytesParesed := 0
+	if r.Status == RequestStateInitialized {
 		requestLine, bytesConsumed, err := parseRequestLine(string(data))
 		if err != nil {
 			return 0, err
@@ -35,10 +39,26 @@ func (r *Request) parse(data []byte) (int, error) {
 			return 0, nil
 		}
 		r.RequestLine = requestLine
-		r.Status = Done
-		return bytesConsumed, nil
+		r.Status = RequestStateParsingHeaders
+		totalBytesParesed += bytesConsumed
 	}
-	return 0, nil
+	if r.Status == RequestStateParsingHeaders {
+		for {
+			bytesConsumed, done, err := r.Headers.Parse(data[totalBytesParesed:])
+			if err != nil {
+				return 0, err
+			}
+			totalBytesParesed += bytesConsumed
+			if done {
+				r.Status = RequestStateDone
+				break
+			}
+			if bytesConsumed == 0 {
+				break
+			}
+		}
+	}
+	return totalBytesParesed, nil
 }
 
 func RequestFromReader(reader io.Reader) (*Request, error) {
@@ -46,6 +66,7 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 	totalBytesRead := 0
 	totalBytesParesed := 0
 	var request Request
+	request.Headers = make(headers.Headers)
 	for {
 		newHttpMessageBytes := make([]byte, 8)
 		newBytesRead := 0
